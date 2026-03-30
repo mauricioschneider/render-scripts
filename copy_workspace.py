@@ -9,6 +9,7 @@ Usage:
     python copy_workspace.py \
         --src-owner-id tea_xxxx \
         --dst-owner-id tea_yyyy \
+        [--project "My Project"] \
         [--execute]
 
     API keys are read from environment variables:
@@ -311,6 +312,7 @@ def copy_workspace(
     dst_owner_id: str,
     dry_run: bool = True,
     overwrite_env_vars: bool = False,
+    project_name: Optional[str] = None,
 ) -> CopyResult:
     result = CopyResult()
 
@@ -320,6 +322,13 @@ def copy_workspace(
     print("\n=== Projects & Environments ===")
     src_projects = src.list_projects(src_owner_id)
     print(f"Found {len(src_projects)} project(s) in source workspace.")
+
+    if project_name:
+        src_projects = [p for p in src_projects if p.get("name") == project_name]
+        if not src_projects:
+            print(f"ERROR: No project named {project_name!r} found in source workspace.")
+            sys.exit(1)
+        print(f"Filtering to project: {project_name!r}")
 
     # src_env_id -> dst_env_id
     env_id_map: dict[str, str] = {}
@@ -381,11 +390,19 @@ def copy_workspace(
                 except requests.HTTPError as e:
                     _error(result, f"Failed to create environment {env_name!r}: {_http_err(e)}")
 
+    # Set of source environment IDs belonging to the selected project(s),
+    # used to filter resources when --project is specified.
+    project_env_ids: Optional[set[str]] = (
+        set(env_id_map.keys()) if project_name else None
+    )
+
     # ------------------------------------------------------------------ #
     # 2. Postgres databases                                                #
     # ------------------------------------------------------------------ #
     print("\n=== Postgres Databases ===")
     src_postgres = src.list_postgres(src_owner_id)
+    if project_env_ids is not None:
+        src_postgres = [pg for pg in src_postgres if pg.get("environmentId") in project_env_ids]
     print(f"Found {len(src_postgres)} Postgres instance(s).")
 
     if not dry_run:
@@ -422,6 +439,8 @@ def copy_workspace(
     # ------------------------------------------------------------------ #
     print("\n=== Redis Instances ===")
     src_redis = src.list_redis(src_owner_id)
+    if project_env_ids is not None:
+        src_redis = [rd for rd in src_redis if rd.get("environmentId") in project_env_ids]
     print(f"Found {len(src_redis)} Redis instance(s).")
 
     if not dry_run:
@@ -458,6 +477,8 @@ def copy_workspace(
     # ------------------------------------------------------------------ #
     print("\n=== Services ===")
     src_services = src.list_services(src_owner_id)
+    if project_env_ids is not None:
+        src_services = [s for s in src_services if s.get("environmentId") in project_env_ids]
     print(f"Found {len(src_services)} service(s).")
 
     if not dry_run:
@@ -583,6 +604,8 @@ def parse_args() -> argparse.Namespace:
                    help="Actually perform the copy (default is dry-run)")
     p.add_argument("--overwrite-env-vars", action="store_true",
                    help="For services that already exist in the destination, overwrite their env vars")
+    p.add_argument("--project", default=None, metavar="PROJECT_NAME",
+                   help="Only copy services belonging to this project (by name)")
     return p.parse_args()
 
 
@@ -636,6 +659,7 @@ def main() -> None:
         dst_owner_id=args.dst_owner_id,
         dry_run=dry_run,
         overwrite_env_vars=args.overwrite_env_vars,
+        project_name=args.project,
     )
 
     print("\n=== Summary ===")
